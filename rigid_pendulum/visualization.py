@@ -185,7 +185,10 @@ def animate_pendulum(results: dict, p: SystemParams, savepath=None):
     """
     2D animation of the double pendulum in the x–y plane.
 
-    Uses downsampled frames so the animation length is ~ real-time.
+    Shows:
+      - blue solid lines = current links (pendulum)
+      - orange dashed line = trail of Tip 1
+      - green dashed line = trail of Tip 2
     """
     t = results["t"]
     q_hist = results["q"]
@@ -193,11 +196,21 @@ def animate_pendulum(results: dict, p: SystemParams, savepath=None):
     n_steps = len(t)
     t_end = t[-1]
 
-    # Target ~30 frames per second of simulated time
+    # Precompute 2D positions
+    base_xy = np.zeros((n_steps, 2))
+    joint_xy = np.zeros((n_steps, 2))  # tip 1
+    tip2_xy = np.zeros((n_steps, 2))   # tip 2
+
+    for i in range(n_steps):
+        pos = joint_positions(q_hist[i], p)
+        base_xy[i] = pos["base"]
+        joint_xy[i] = pos["joint12"]
+        tip2_xy[i] = pos["tip2"]
+
+    # Downsample frames for real-time-ish animation
     target_frames = int(30 * t_end)
     if target_frames <= 0:
         target_frames = n_steps
-
     frame_step = max(1, n_steps // target_frames)
     frame_indices = np.arange(0, n_steps, frame_step)
 
@@ -212,34 +225,49 @@ def animate_pendulum(results: dict, p: SystemParams, savepath=None):
     ax.set_ylabel("y (m)")
     ax.set_title("Double pendulum motion (2D)")
 
-    line1, = ax.plot([], [], lw=2)
-    line2, = ax.plot([], [], lw=2)
+    # Current links
+    link1_line, = ax.plot([], [], lw=2, color="tab:blue")
+    link2_line, = ax.plot([], [], lw=2, color="tab:blue")
 
-    def init():
-        line1.set_data([], [])
-        line2.set_data([], [])
-        return line1, line2
+    # Trails
+    tip1_trail, = ax.plot([], [], linestyle="--",
+                          linewidth=1.5, color="tab:orange", label="Tip 1 trail")
+    tip2_trail, = ax.plot([], [], linestyle="--",
+                          linewidth=1.5, color="tab:green", label="Tip 2 trail")
+
+    ax.legend()
 
     def update(frame_idx):
         i = frame_indices[frame_idx]
-        pos = joint_positions(q_hist[i], p)
-        base = pos["base"]
-        joint12 = pos["joint12"]
-        tip2 = pos["tip2"]
 
-        line1.set_data([base[0], joint12[0]],
-                       [base[1], joint12[1]])
-        line2.set_data([joint12[0], tip2[0]],
-                       [joint12[1], tip2[1]])
-        return line1, line2
+        b = base_xy[i]
+        j = joint_xy[i]
+        t2 = tip2_xy[i]
+
+        # current links
+        link1_line.set_data([b[0], j[0]],
+                            [b[1], j[1]])
+        link2_line.set_data([j[0], t2[0]],
+                            [j[1], t2[1]])
+
+        # trails up to now
+        j_trail = joint_xy[: i + 1]
+        t2_trail = tip2_xy[: i + 1]
+        tip1_trail.set_data(j_trail[:, 0], j_trail[:, 1])
+        tip2_trail.set_data(t2_trail[:, 0], t2_trail[:, 1])
+
+        return link1_line, link2_line, tip1_trail, tip2_trail
+
+    def init():
+        return update(0)
 
     ani = FuncAnimation(
         fig,
         update,
         frames=len(frame_indices),
         init_func=init,
-        blit=True,
-        interval=1000 * dt * frame_step,  # ms per frame
+        blit=False,                  # safer
+        interval=1000 * dt * frame_step,
     )
 
     if savepath is not None:
@@ -247,16 +275,19 @@ def animate_pendulum(results: dict, p: SystemParams, savepath=None):
 
     return fig, ani
 
-
 # ---------- NEW: 3D animation with trails ----------
 
 def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
     """
     3D Matplotlib animation of the double pendulum.
 
-    - The motion is still planar (z=0), but rendered in a 3D axis.
-    - Shows both links.
-    - Shows trajectory trails for Tip 1 and Tip 2 (like the example screenshot).
+    Planar motion embedded in x–z plane so it visually swings up/down:
+        x_3D = x_physical
+        y_3D = 0
+        z_3D = y_physical
+
+    Trails are drawn for Tip 1 and Tip 2.
+    No blitting (3D + blit often produces blank plots).
     """
     t = results["t"]
     q_hist = results["q"]
@@ -264,7 +295,7 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
     n_steps = len(t)
     t_end = t[-1]
 
-    # Precompute positions
+    # Precompute 3D positions: (x, 0, y) so z shows vertical motion
     base_xyz = np.zeros((n_steps, 3))
     joint_xyz = np.zeros((n_steps, 3))
     tip2_xyz = np.zeros((n_steps, 3))
@@ -275,9 +306,9 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
         joint2d = pos["joint12"]
         tip2_2d = pos["tip2"]
 
-        base_xyz[i] = [base2d[0], base2d[1], 0.0]
-        joint_xyz[i] = [joint2d[0], joint2d[1], 0.0]
-        tip2_xyz[i] = [tip2_2d[0], tip2_2d[1], 0.0]
+        base_xyz[i] = [base2d[0], 0.0, base2d[1]]
+        joint_xyz[i] = [joint2d[0], 0.0, joint2d[1]]
+        tip2_xyz[i] = [tip2_2d[0], 0.0, tip2_2d[1]]
 
     # Downsample frames for real-time-ish animation
     target_frames = int(30 * t_end)
@@ -292,13 +323,16 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
     L_total = p.body1.length + p.body2.length
     margin = 0.2 * L_total
     ax.set_xlim(-L_total - margin, L_total + margin)
-    ax.set_ylim(-L_total - margin, L_total + margin)
+    ax.set_ylim(-L_total - margin, L_total + margin)  # depth
     ax.set_zlim(-L_total - margin, L_total + margin)
 
     ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
-    ax.set_zlabel("z (m)")
-    ax.set_title("Double pendulum motion (3D view with trails)")
+    ax.set_ylabel("depth (m)")
+    ax.set_zlabel("z (m)")  # vertical on screen
+    ax.set_title("Double pendulum motion (3D view with vertical swing)")
+
+    # View so x is horizontal and z vertical on screen
+    ax.view_init(elev=20, azim=-90)
 
     # Current links
     link1_line, = ax.plot([], [], [], lw=2, color="tab:blue")
@@ -311,13 +345,6 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
                           linewidth=1.5, color="tab:green", label="Tip 2 trail")
 
     ax.legend()
-
-    def init():
-        link1_line.set_data_3d([], [], [])
-        link2_line.set_data_3d([], [], [])
-        tip1_trail.set_data_3d([], [], [])
-        tip2_trail.set_data_3d([], [], [])
-        return link1_line, link2_line, tip1_trail, tip2_trail
 
     def update(frame_idx):
         i = frame_indices[frame_idx]
@@ -334,7 +361,7 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
                                [j[1], t2[1]],
                                [j[2], t2[2]])
 
-        # Trails up to current frame (Tip 1 = joint, Tip 2 = tip2)
+        # Trails up to current frame
         j_trail = joint_xyz[: i + 1]
         t2_trail = tip2_xyz[: i + 1]
 
@@ -347,12 +374,16 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
 
         return link1_line, link2_line, tip1_trail, tip2_trail
 
+    def init():
+        # draw first frame
+        return update(0)
+
     ani = FuncAnimation(
         fig,
         update,
         frames=len(frame_indices),
         init_func=init,
-        blit=True,
+        blit=False,                    # <- IMPORTANT
         interval=1000 * dt * frame_step,
     )
 
@@ -360,3 +391,56 @@ def animate_pendulum_3d(results: dict, p: SystemParams, savepath=None):
         ani.save(savepath, fps=30)
 
     return fig, ani
+
+
+def plot_tip_trajectories_3d(results: dict, p: SystemParams, savepath=None):
+    """
+    Static 3D plot showing ONLY the trajectories (trails) of Tip 1 and Tip 2.
+
+    No pendulum links are drawn; just the paths, similar to the 3D animation
+    but as a single figure for the report.
+    """
+    t = results["t"]
+    q_hist = results["q"]
+    n_steps = len(t)
+
+    # Precompute 3D positions in x–z plane: (x, 0, y)
+    joint_xyz = np.zeros((n_steps, 3))
+    tip2_xyz = np.zeros((n_steps, 3))
+
+    for i in range(n_steps):
+        pos = joint_positions(q_hist[i], p)
+        joint2d = pos["joint12"]
+        tip2_2d = pos["tip2"]
+
+        joint_xyz[i] = [joint2d[0], 0.0, joint2d[1]]
+        tip2_xyz[i] = [tip2_2d[0], 0.0, tip2_2d[1]]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+
+    L_total = p.body1.length + p.body2.length
+    margin = 0.2 * L_total
+    ax.set_xlim(-L_total - margin, L_total + margin)
+    ax.set_ylim(-L_total - margin, L_total + margin)
+    ax.set_zlim(-L_total - margin, L_total + margin)
+
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("depth (m)")
+    ax.set_zlabel("z (m)")
+    ax.set_title("Tip trajectories of body 1 and body 2 (3D)")
+
+    # Same viewing angle as animation
+    ax.view_init(elev=20, azim=-90)
+
+    ax.plot(joint_xyz[:, 0], joint_xyz[:, 1], joint_xyz[:, 2],
+            linestyle="--", linewidth=1.5, color="tab:orange", label="Tip 1 trail")
+    ax.plot(tip2_xyz[:, 0], tip2_xyz[:, 1], tip2_xyz[:, 2],
+            linestyle="--", linewidth=1.5, color="tab:green", label="Tip 2 trail")
+
+    ax.legend()
+
+    if savepath is not None:
+        fig.savefig(savepath, dpi=300, bbox_inches="tight")
+
+    return fig, ax
